@@ -1,0 +1,117 @@
+import websocket
+import json
+import time
+import random
+import requests
+from datetime import datetime, timedelta
+import pytz
+
+# ==== USER CONFIG ====
+API_TOKEN = "tVCTQNOIiKrR0uv"
+APP_ID = "82922"
+TELEGRAM_TOKEN = "7506855523:AAEoD-2xo2H82pSLsR9MYJQ7z5Jefpw9POc"
+TELEGRAM_CHAT_ID = "7708999134"
+TIMEZONE = pytz.timezone("Asia/Kuala_Lumpur")
+ADVANCE_MIN = 3
+# ======================
+
+# ==== CURRENCY LIST ====
+currency_pairs = [
+    "frxEURUSD", "frxUSDJPY", "frxGBPUSD", "frxUSDCHF", "frxUSDCAD", "frxAUDUSD",
+    "frxNZDUSD", "frxEURJPY", "frxGBPJPY", "frxAUDJPY", "USDINR_OTC", "frxEURGBP",
+    "frxEURAUD", "frxGBPCAD"
+]
+# ========================
+
+WEAK_DIGITS = [4, 5]
+used_times = set()
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'}
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print("Telegram Error:", e)
+
+def next_gap():
+    return random.randint(300, 1200)  # 5 to 20 mins
+
+def get_time():
+    return datetime.now(TIMEZONE)
+
+def create_message(time_now, pair, signal):
+    box = "🟩" * 14 if signal == "CALL" else "🟥" * 14
+    return f"""✿ RD SIGNAL PRO ✿
+----------------------
+🕓 Time: <b>{time_now}</b>
+💱 Pair: <b>{pair.replace('frx','').replace('_OTC','')}</b>
+📈 Type: <b>{'𝗖𝗔𝗟𝗟' if signal == 'CALL' else '𝗣𝗨𝗧'}</b>
+----------------------
+⚠️ Follow Money Management ⚠️
+Avoid Trade If Previous Candle Doji/Wick/Big Body!
+Avoid Trade In Opposite Trend!
+{box}
+"""
+
+def on_message(ws, message):
+    global current_symbol, used_times, next_run
+
+    data = json.loads(message)
+    if "tick" in data:
+        now = get_time()
+        entry_time = (now + timedelta(minutes=ADVANCE_MIN)).strftime('%H:%M')
+
+        if entry_time in used_times:
+            return
+
+        quote = data["tick"]["quote"]
+        digit = int(str(quote)[-1])
+
+        if digit in WEAK_DIGITS:
+            print(f"🟡 {now.strftime('%H:%M')} - {current_symbol} - Weak Signal (digit {digit})")
+            ws.close()
+            return
+
+        signal = "PUT" if digit <= 4 else "CALL"
+        pair_name = current_symbol
+        msg = create_message(entry_time, pair_name, signal)
+
+        print(f"🟢 {now.strftime('%H:%M')} ➜ {entry_time};{pair_name};{signal} (digit {digit})")
+        send_telegram(msg)
+
+        used_times.add(entry_time)
+
+        sleep_time = next_gap()
+        print(f"⏳ Waiting {sleep_time//60} mins before next signal...\n")
+        ws.close()
+        time.sleep(sleep_time)
+
+def on_open(ws):
+    global current_symbol
+    print(f"✅ Connected to {current_symbol}")
+    ws.send(json.dumps({"authorize": API_TOKEN}))
+    time.sleep(1)
+    ws.send(json.dumps({"ticks": current_symbol}))
+
+def on_error(ws, error):
+    print("❌ Error:", error)
+
+def on_close(ws):
+    print("🔁 Switching to next pair...\n")
+
+def run_bot():
+    global current_symbol
+    while True:
+        for symbol in currency_pairs:
+            current_symbol = symbol
+            ws_url = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
+            ws = websocket.WebSocketApp(ws_url,
+                                        on_open=on_open,
+                                        on_message=on_message,
+                                        on_error=on_error,
+                                        on_close=on_close)
+            ws.run_forever()
+
+if __name__ == "__main__":
+    run_bot()
